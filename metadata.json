@@ -1,0 +1,6 @@
+{
+  "name": "CommodiCast - Real-Time Commodity Price Predictor",
+  "description": "Institutional-grade commodity price prediction terminal powered by real-time market data analysis, predictive AI modeling, and Google Drive research sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
