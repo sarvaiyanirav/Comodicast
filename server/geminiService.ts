@@ -1,6 +1,19 @@
 import { GoogleGenAI } from '@google/genai';
 import { Commodity, ForecastHorizon, PredictionResult, ScenarioShock } from '../src/types/commodity';
 
+// In-memory cache to prevent burning API quota
+const predictionCache = new Map<string, { result: PredictionResult; expiresAt: number }>();
+const intelCache = new Map<string, { data: any; expiresAt: number }>();
+
+// Quota circuit breaker: if 429 is encountered, avoid making calls until cooldown expires
+let quotaCooldownUntil = 0;
+
+function isQuotaExceeded(err: any): boolean {
+  if (!err) return false;
+  const str = String(err.message || err.status || JSON.stringify(err));
+  return str.includes('429') || str.includes('RESOURCE_EXHAUSTED') || str.includes('quota') || str.includes('rate-limit');
+}
+
 export function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -21,6 +34,18 @@ export async function generateAIPrediction(
   horizon: ForecastHorizon,
   customShocks?: ScenarioShock
 ): Promise<PredictionResult | null> {
+  // Check in-memory cache first (valid for 10 minutes)
+  const cacheKey = `${commodity.id}:${horizon}:${JSON.stringify(customShocks || {})}`;
+  const cached = predictionCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.result;
+  }
+
+  // If in quota cooldown, skip API call silently and return null to use econometric engine
+  if (Date.now() < quotaCooldownUntil) {
+    return null;
+  }
+
   const ai = getGeminiClient();
   if (!ai) {
     return null;
@@ -104,7 +129,6 @@ You MUST output ONLY a valid JSON object matching this exact structure:
     if (jsonMatch) {
       cleanedJson = jsonMatch[1];
     } else {
-      // Find outermost curly braces
       const firstBrace = text.indexOf('{');
       const lastBrace = text.lastIndexOf('}');
       if (firstBrace !== -1 && lastBrace !== -1) {
@@ -136,7 +160,7 @@ You MUST output ONLY a valid JSON object matching this exact structure:
       p90: Number(pt.p90 || parsed.confidenceInterval?.upperP90 || commodity.currentPrice * 1.05),
     }));
 
-    return {
+    const result: PredictionResult = {
       commodityId: commodity.id,
       horizon,
       timestamp: Date.now(),
@@ -165,26 +189,92 @@ You MUST output ONLY a valid JSON object matching this exact structure:
       groundingSources,
       isRealtimeGrounded: true,
     };
-  } catch (err) {
-    console.warn('Gemini forecast generation failed or parsed invalid JSON, falling back:', err);
+
+    // Store in cache for 10 minutes
+    predictionCache.set(cacheKey, { result, expiresAt: Date.now() + 10 * 60 * 1000 });
+    return result;
+  } catch (err: any) {
+    if (isQuotaExceeded(err)) {
+      // Cooldown for 5 minutes without dumping stack trace to console
+      quotaCooldownUntil = Date.now() + 5 * 60 * 1000;
+    }
     return null;
   }
 }
 
+const SECTOR_INTEL_DEFAULTS: Record<string, any> = {
+  ENERGY: {
+    sentiment: 'Cautiously Bullish',
+    sentimentScore: 68,
+    breakingCatalysts: [
+      { headline: 'OPEC+ production voluntary discipline remains firm through upcoming quarter', impact: 'Bullish', sector: 'Energy' },
+      { headline: 'Red Sea maritime shipping detours maintain freight tanker risk premium', impact: 'Bullish', sector: 'Energy' },
+      { headline: 'US commercial crude inventories post larger-than-expected seasonal draw', impact: 'Bullish', sector: 'Energy' },
+      { headline: 'Refinery utilization rates rise ahead of seasonal driving demand peak', impact: 'Neutral', sector: 'Energy' },
+    ],
+    macroSummary: 'Energy markets are balancing geopolitical chokepoint risks against non-OPEC production growth and macroeconomic interest rate expectations.',
+  },
+  PRECIOUS_METALS: {
+    sentiment: 'Strongly Bullish',
+    sentimentScore: 82,
+    breakingCatalysts: [
+      { headline: 'Sovereign central banks add record physical bullion to strategic currency reserves', impact: 'Bullish', sector: 'Precious Metals' },
+      { headline: 'COMEX registered silver inventories drop to multi-year lows amid industrial solar draw', impact: 'Bullish', sector: 'Precious Metals' },
+      { headline: 'Market pricing in further global monetary easing cycles across major central banks', impact: 'Bullish', sector: 'Precious Metals' },
+      { headline: 'Geopolitical hedging demand offsets temporary US Dollar Index bounces', impact: 'Bullish', sector: 'Precious Metals' },
+    ],
+    macroSummary: 'Gold and silver are supported by persistent de-dollarization flows, structural central bank demand, and robust industrial photovoltaic consumption.',
+  },
+  INDUSTRIAL_METALS: {
+    sentiment: 'Moderately Bullish',
+    sentimentScore: 65,
+    breakingCatalysts: [
+      { headline: 'Global clean energy and power grid buildouts accelerate copper cathode demand', impact: 'Bullish', sector: 'Industrial Metals' },
+      { headline: 'Battery-grade lithium carbonate spot inquiries stabilize following supply curtailments', impact: 'Neutral', sector: 'Industrial Metals' },
+      { headline: 'Smelter treatment and refining charges (TC/RCs) hover near historic lows, signaling tight mine concentrates', impact: 'Bullish', sector: 'Industrial Metals' },
+    ],
+    macroSummary: 'Doctor Copper and electrification metals are buoyed by supply-side mine bottlenecks and strong renewable infrastructure investment.',
+  },
+  AGRICULTURE: {
+    sentiment: 'Neutral to Bullish',
+    sentimentScore: 58,
+    breakingCatalysts: [
+      { headline: 'USDA crop condition reports reflect variable moisture in key grain belts', impact: 'Neutral', sector: 'Agriculture' },
+      { headline: 'Black Sea port infrastructure repairs safeguard prompt shipping transit', impact: 'Neutral', sector: 'Agriculture' },
+      { headline: 'Global export competition active as Northern Hemisphere harvest progresses', impact: 'Bearish', sector: 'Agriculture' },
+    ],
+    macroSummary: 'Agricultural grains are navigating seasonal supply influxes while closely monitoring weather forecasts and export pace.',
+  },
+  SOFTS: {
+    sentiment: 'Bullish',
+    sentimentScore: 74,
+    breakingCatalysts: [
+      { headline: 'West Africa cocoa bean deliveries to ports trail five-year seasonal averages', impact: 'Bullish', sector: 'Softs' },
+      { headline: 'Brazilian Arabica coffee growing regions monitor flowering stage precipitation', impact: 'Bullish', sector: 'Softs' },
+      { headline: 'Port container turnaround times and logistics costs remain elevated for tropical commodities', impact: 'Bullish', sector: 'Softs' },
+    ],
+    macroSummary: 'Soft commodities continue to experience structural supply tightness and acute sensitivity to tropical weather disruptions.',
+  },
+};
+
 export async function fetchLiveMarketIntelligence(sector: string): Promise<any> {
+  const normSector = (sector || 'ENERGY').toUpperCase();
+  const defaultData = SECTOR_INTEL_DEFAULTS[normSector] || SECTOR_INTEL_DEFAULTS.ENERGY;
+
+  // Check cache (valid for 15 minutes)
+  const cached = intelCache.get(normSector);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.data;
+  }
+
+  // If in quota cooldown, immediately return rich default data
+  if (Date.now() < quotaCooldownUntil) {
+    return { ...defaultData, isLive: false };
+  }
+
   const ai = getGeminiClient();
   if (!ai) {
-    return {
-      sentiment: 'Cautiously Bullish',
-      sentimentScore: 64,
-      breakingCatalysts: [
-        { headline: 'OPEC+ output limits remain steady through current quarter', impact: 'Bullish', sector: 'Energy' },
-        { headline: 'Central bank physical gold accumulation reaches monthly high', impact: 'Bullish', sector: 'Precious Metals' },
-        { headline: 'Copper warehouse stockpiles contract amidst global grid expansion', impact: 'Bullish', sector: 'Industrial Metals' },
-      ],
-      macroSummary: 'Commodity markets are balancing firm manufacturing demand in energy transition materials against currency fluctuations.',
-      isLive: false,
-    };
+    return { ...defaultData, isLive: false };
   }
 
   try {
@@ -212,18 +302,16 @@ Respond in JSON format:
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     const cleaned = jsonMatch ? jsonMatch[1] : text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
     const data = JSON.parse(cleaned);
-    return { ...data, isLive: true };
-  } catch (err) {
-    console.warn('Failed to fetch live intel from Gemini:', err);
-    return {
-      sentiment: 'Neutral to Bullish',
-      sentimentScore: 59,
-      breakingCatalysts: [
-        { headline: 'Supply chains adapting to geopolitical sea chokepoints', impact: 'Bullish', sector: 'Energy' },
-        { headline: 'Industrial demand resilient for electrification metals', impact: 'Bullish', sector: 'Metals' },
-      ],
-      macroSummary: 'Market participants are watching US economic prints and central bank interest rate trajectories.',
-      isLive: false,
-    };
+    const result = { ...data, isLive: true };
+
+    // Store in cache for 15 minutes
+    intelCache.set(normSector, { data: result, expiresAt: Date.now() + 15 * 60 * 1000 });
+    return result;
+  } catch (err: any) {
+    if (isQuotaExceeded(err)) {
+      quotaCooldownUntil = Date.now() + 5 * 60 * 1000;
+    }
+    // Return rich default sector data seamlessly
+    return { ...defaultData, isLive: false };
   }
 }

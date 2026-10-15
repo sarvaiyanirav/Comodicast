@@ -63,8 +63,8 @@ export const LiveMarketNews: React.FC<LiveMarketNewsProps> = ({ selectedSector }
         const data = await res.json();
         setIntel(data);
       }
-    } catch (err) {
-      console.warn('Live intel fetch error:', err);
+    } catch (_) {
+      // Graceful fallback already in place
     } finally {
       setIsLoading(false);
     }

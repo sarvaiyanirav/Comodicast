@@ -147,8 +147,7 @@ export default function App() {
           const fallback = runQuantitativeForecast(commodity, horizon, shocks);
           setPrediction(fallback);
         }
-      } catch (err) {
-        console.warn('Prediction API call failed, falling back to local quantitative model:', err);
+      } catch (_) {
         const fallback = runQuantitativeForecast(commodity, horizon, shocks);
         setPrediction(fallback);
       } finally {
