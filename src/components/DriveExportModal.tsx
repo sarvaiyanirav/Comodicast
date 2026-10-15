@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Commodity, PredictionResult } from '../types/commodity';
+import { CurrencyCode, convertUSD, formatCurrencyAmount, convertUnitLabel, SUPPORTED_CURRENCIES } from '../lib/currencies';
 import { saveForecastReportToDrive } from '../lib/drive';
 import { HardDrive, CheckCircle2, ExternalLink, X, FileText, Code2, FileCode, AlertCircle, Loader2 } from 'lucide-react';
 
@@ -11,6 +12,7 @@ interface DriveExportModalProps {
   accessToken: string | null;
   onLogin: () => void;
   onExportSuccess: () => void;
+  selectedCurrency: CurrencyCode;
 }
 
 type ExportFormat = 'markdown' | 'html' | 'json';
@@ -23,10 +25,11 @@ export const DriveExportModal: React.FC<DriveExportModalProps> = ({
   accessToken,
   onLogin,
   onExportSuccess,
+  selectedCurrency,
 }) => {
   const [format, setFormat] = useState<ExportFormat>('markdown');
   const [reportTitle, setReportTitle] = useState(
-    `CommodiCast_${commodity.symbol}_${prediction.horizon}_Forecast_${new Date().toISOString().slice(0, 10)}`
+    `CommodiCast_${commodity.symbol}_${prediction.horizon}_${selectedCurrency}_Forecast_${new Date().toISOString().slice(0, 10)}`
   );
   const [analystNotes, setAnalystNotes] = useState('');
   const [isExporting, setIsExporting] = useState(false);
@@ -35,6 +38,17 @@ export const DriveExportModal: React.FC<DriveExportModalProps> = ({
 
   if (!isOpen) return null;
 
+  const currencyInfo = SUPPORTED_CURRENCIES[selectedCurrency] || SUPPORTED_CURRENCIES.USD;
+  const rate = currencyInfo.rateAgainstUSD;
+
+  const convTarget = prediction.predictedPrice * rate;
+  const convSpot = commodity.currentPrice * rate;
+  const convP10 = prediction.confidenceInterval.lowerP10 * rate;
+  const convP50 = prediction.confidenceInterval.medianP50 * rate;
+  const convP90 = prediction.confidenceInterval.upperP90 * rate;
+  const convStopLoss = prediction.recommendedStopLoss * rate;
+  const convTakeProfit = prediction.recommendedTakeProfit * rate;
+
   const generateReportContent = () => {
     const timestamp = new Date().toLocaleString();
     if (format === 'json') {
@@ -42,18 +56,33 @@ export const DriveExportModal: React.FC<DriveExportModalProps> = ({
         {
           application: 'CommodiCast Pro Terminal',
           exportedAt: timestamp,
+          currency: {
+            code: selectedCurrency,
+            symbol: currencyInfo.symbol,
+            rateAgainstUSD: rate,
+          },
           commodity: {
             id: commodity.id,
             name: commodity.name,
             symbol: commodity.symbol,
             sector: commodity.sector,
             unit: commodity.unit,
-            spotPrice: commodity.currentPrice,
+            convertedUnit: convertUnitLabel(commodity.unit, selectedCurrency),
+            spotPriceUSD: commodity.currentPrice,
+            spotPriceConverted: convSpot,
             exchange: commodity.exchange,
             rsi14: commodity.rsi14,
             volatility30d: commodity.volatility30d,
           },
-          prediction,
+          predictionUSD: prediction,
+          predictionConverted: {
+            predictedPrice: convTarget,
+            lowerP10: convP10,
+            medianP50: convP50,
+            upperP90: convP90,
+            stopLoss: convStopLoss,
+            takeProfit: convTakeProfit,
+          },
           analystNotes,
         },
         null,
@@ -76,16 +105,18 @@ export const DriveExportModal: React.FC<DriveExportModalProps> = ({
     .bear { color: #F87171; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #1E293B; }
+    .fx-tag { background: #1E293B; color: #38BDF8; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: monospace; }
   </style>
 </head>
 <body>
   <h1>CommodiCast Research Dossier: ${commodity.name} (${commodity.symbol})</h1>
   <p>Exported: ${timestamp} | Horizon: ${prediction.horizon} | Recommendation: <strong>${prediction.signal}</strong></p>
+  <p><span class="fx-tag">Currency: ${selectedCurrency} (1 USD = ${rate} ${selectedCurrency})</span></p>
   <div class="card">
-    <div class="metric">Target Price: $${prediction.predictedPrice} ${commodity.unit} (${prediction.expectedChangePercent >= 0 ? '+' : ''}${prediction.expectedChangePercent}%)</div>
-    <p>Spot Price: $${commodity.currentPrice} | Conviction Score: ${prediction.convictionScore}%</p>
-    <p>Probabilistic 90% C.I.: P10 $${prediction.confidenceInterval.lowerP10} — P50 $${prediction.confidenceInterval.medianP50} — P90 $${prediction.confidenceInterval.upperP90}</p>
-    <p>Recommended Stop-Loss: $${prediction.recommendedStopLoss} | Take-Profit: $${prediction.recommendedTakeProfit}</p>
+    <div class="metric">Target Price: ${formatCurrencyAmount(convTarget, selectedCurrency)} (${prediction.expectedChangePercent >= 0 ? '+' : ''}${prediction.expectedChangePercent}%)</div>
+    <p>Spot Price: ${formatCurrencyAmount(convSpot, selectedCurrency)} [USD $${commodity.currentPrice}] | Conviction Score: ${prediction.convictionScore}%</p>
+    <p>Probabilistic 90% C.I.: P10 ${formatCurrencyAmount(convP10, selectedCurrency)} — P50 ${formatCurrencyAmount(convP50, selectedCurrency)} — P90 ${formatCurrencyAmount(convP90, selectedCurrency)}</p>
+    <p>Recommended Stop-Loss: ${formatCurrencyAmount(convStopLoss, selectedCurrency)} | Take-Profit: ${formatCurrencyAmount(convTakeProfit, selectedCurrency)}</p>
   </div>
   <div class="card">
     <h3>Executive Thesis</h3>
@@ -108,6 +139,7 @@ export const DriveExportModal: React.FC<DriveExportModalProps> = ({
 **Commodity:** ${commodity.name} (${commodity.symbol})  
 **Exchange:** ${commodity.exchange} | **Sector:** ${commodity.sector}  
 **Forecast Horizon:** ${prediction.horizon}  
+**Export Currency:** ${selectedCurrency} (${currencyInfo.flag} 1 USD = ${rate} ${selectedCurrency})  
 **Generated At:** ${timestamp}  
 
 ---
@@ -115,15 +147,15 @@ export const DriveExportModal: React.FC<DriveExportModalProps> = ({
 ## 1. Executive Summary & Action Signal
 * **Recommendation:** **${prediction.signal}**
 * **Conviction Score:** ${prediction.convictionScore}%
-* **Current Spot Price:** $${commodity.currentPrice} ${commodity.unit}
-* **Projected Target Price:** **$${prediction.predictedPrice}** (${prediction.expectedChangePercent >= 0 ? '+' : ''}${prediction.expectedChangePercent}%)
-* **Recommended Stop-Loss:** $${prediction.recommendedStopLoss}
-* **Recommended Take-Profit:** $${prediction.recommendedTakeProfit}
+* **Target Price (${selectedCurrency}):** **${formatCurrencyAmount(convTarget, selectedCurrency)}** [Base USD: $${prediction.predictedPrice}] (${prediction.expectedChangePercent >= 0 ? '+' : ''}${prediction.expectedChangePercent}%)
+* **Current Spot Price:** ${formatCurrencyAmount(convSpot, selectedCurrency)} (${convertUnitLabel(commodity.unit, selectedCurrency)}) [Base USD: $${commodity.currentPrice} ${commodity.unit}]
+* **Recommended Stop-Loss:** ${formatCurrencyAmount(convStopLoss, selectedCurrency)}
+* **Recommended Take-Profit:** ${formatCurrencyAmount(convTakeProfit, selectedCurrency)}
 
-### Probabilistic Confidence Cone (90% C.I.)
-* **P10 (Bearish Case):** $${prediction.confidenceInterval.lowerP10}
-* **P50 (Median Baseline):** $${prediction.confidenceInterval.medianP50}
-* **P90 (Bullish Case):** $${prediction.confidenceInterval.upperP90}
+### Probabilistic Confidence Cone (90% C.I. in ${selectedCurrency})
+* **P10 (Bearish Case):** ${formatCurrencyAmount(convP10, selectedCurrency)}
+* **P50 (Median Baseline):** ${formatCurrencyAmount(convP50, selectedCurrency)}
+* **P90 (Bullish Case):** ${formatCurrencyAmount(convP90, selectedCurrency)}
 
 ---
 
@@ -182,7 +214,7 @@ ${prediction.drivers.map(d => `* **[${d.impact.toUpperCase()}]** ${d.title} (Wei
         fileName: finalFileName,
         content,
         mimeType: mimeMap[format],
-        description: `CommodiCast real-time prediction dossier for ${commodity.name} (${prediction.horizon})`,
+        description: `CommodiCast real-time prediction dossier for ${commodity.name} in ${selectedCurrency} (${prediction.horizon})`,
       });
 
       setSuccessLink(result.webViewLink || 'https://drive.google.com');
@@ -209,7 +241,7 @@ ${prediction.drivers.map(d => `* **[${d.impact.toUpperCase()}]** ${d.title} (Wei
                 Export Forecast Dossier to Google Drive
               </h3>
               <p className="text-xs text-slate-400">
-                Direct cloud synchronization for {commodity.name} ({prediction.horizon})
+                Direct cloud synchronization for {commodity.name} in {selectedCurrency} ({prediction.horizon})
               </p>
             </div>
           </div>
@@ -292,6 +324,15 @@ ${prediction.drivers.map(d => `* **[${d.impact.toUpperCase()}]** ${d.title} (Wei
                   <span>Dataset (.json)</span>
                 </button>
               </div>
+            </div>
+
+            {/* Currency Tag */}
+            <div className="p-2.5 rounded-lg bg-[#0c1017] border border-slate-800 flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-400">Export Currency Basis:</span>
+              <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                <span>{currencyInfo.flag}</span>
+                <span>{selectedCurrency} (1 USD = {rate} {selectedCurrency})</span>
+              </span>
             </div>
 
             {/* File Name */}

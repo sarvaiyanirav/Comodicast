@@ -1,5 +1,6 @@
 import React from 'react';
 import { Commodity, CommoditySector } from '../types/commodity';
+import { CurrencyCode, convertUSD, formatCurrencyAmount } from '../lib/currencies';
 import { Flame, Coins, Hammer, Wheat, Coffee, Layers, TrendingUp, TrendingDown } from 'lucide-react';
 
 interface CommoditySelectorProps {
@@ -9,6 +10,7 @@ interface CommoditySelectorProps {
   selectedSector: 'ALL' | CommoditySector;
   onSelectSector: (sector: 'ALL' | CommoditySector) => void;
   searchTerm: string;
+  selectedCurrency: CurrencyCode;
 }
 
 const SECTOR_ICONS: Record<CommoditySector, React.ReactNode> = {
@@ -35,6 +37,7 @@ export const CommoditySelector: React.FC<CommoditySelectorProps> = ({
   selectedSector,
   onSelectSector,
   searchTerm,
+  selectedCurrency,
 }) => {
   const filtered = commodities.filter((c) => {
     const matchesSector = selectedSector === 'ALL' || c.sector === selectedSector;
@@ -74,6 +77,7 @@ export const CommoditySelector: React.FC<CommoditySelectorProps> = ({
         {filtered.map((commodity) => {
           const isSelected = commodity.id === selectedCommodityId;
           const isPos = commodity.change >= 0;
+          const convertedPrice = convertUSD(commodity.currentPrice, selectedCurrency);
 
           return (
             <button
@@ -104,7 +108,7 @@ export const CommoditySelector: React.FC<CommoditySelectorProps> = ({
 
               <div className="flex items-baseline justify-between gap-1 mb-1">
                 <span className="font-mono text-sm font-bold text-white">
-                  ${commodity.currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {formatCurrencyAmount(convertedPrice, selectedCurrency)}
                 </span>
                 <span
                   className={`flex items-center font-mono text-[11px] font-semibold ${

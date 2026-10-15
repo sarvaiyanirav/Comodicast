@@ -1,18 +1,18 @@
 import React from 'react';
 import { Commodity, ForecastHorizon, PredictionResult } from '../types/commodity';
+import { CurrencyCode, convertUSD, formatCurrencyAmount, convertUnitLabel, SUPPORTED_CURRENCIES } from '../lib/currencies';
 import {
   TrendingUp,
   TrendingDown,
   ShieldAlert,
-  Target,
   Sparkles,
   ExternalLink,
   Sliders,
   HardDrive,
-  Info,
   Clock,
   Globe2,
   Boxes,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 interface PredictionDashboardProps {
@@ -24,6 +24,8 @@ interface PredictionDashboardProps {
   onOpenStressTest: () => void;
   onExportToDrive: () => void;
   isDriveConnected: boolean;
+  selectedCurrency: CurrencyCode;
+  onOpenCurrencyModal: () => void;
 }
 
 const SIGNAL_CONFIG: Record<
@@ -71,6 +73,8 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
   onOpenStressTest,
   onExportToDrive,
   isDriveConnected,
+  selectedCurrency,
+  onOpenCurrencyModal,
 }) => {
   if (isLoading || !prediction) {
     return (
@@ -91,10 +95,21 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
 
   const signalStyle = SIGNAL_CONFIG[prediction.signal] || SIGNAL_CONFIG.HOLD;
   const isPos = prediction.expectedChangePercent >= 0;
+  const currencyInfo = SUPPORTED_CURRENCIES[selectedCurrency] || SUPPORTED_CURRENCIES.USD;
+  const rate = currencyInfo.rateAgainstUSD;
+
+  // Currency converted values
+  const convertedTarget = prediction.predictedPrice * rate;
+  const convertedSpot = commodity.currentPrice * rate;
+  const convertedP10 = prediction.confidenceInterval.lowerP10 * rate;
+  const convertedP50 = prediction.confidenceInterval.medianP50 * rate;
+  const convertedP90 = prediction.confidenceInterval.upperP90 * rate;
+  const convertedStopLoss = prediction.recommendedStopLoss * rate;
+  const convertedTakeProfit = prediction.recommendedTakeProfit * rate;
 
   return (
     <div className="space-y-4">
-      {/* Top Banner: Horizon Selector & Action Buttons */}
+      {/* Top Banner: Horizon Selector, FX Tag & Action Buttons */}
       <div className="bg-[#10141E] border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
         {/* Horizon Tabs */}
         <div className="flex items-center gap-2">
@@ -119,8 +134,18 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
           </div>
         </div>
 
-        {/* Tools: Stress Testing & Drive Export */}
+        {/* Currency and Tools */}
         <div className="flex items-center gap-2">
+          {/* Active FX Rate Indicator button */}
+          <button
+            onClick={onOpenCurrencyModal}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#090C12] hover:bg-[#131926] text-slate-300 hover:text-white border border-slate-800 hover:border-slate-700 rounded-lg text-xs font-mono transition-colors cursor-pointer"
+            title="Open Currency Valuation Matrix"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 text-cyan-400" />
+            <span>{currencyInfo.flag} 1 USD = {currencyInfo.rateAgainstUSD} {selectedCurrency}</span>
+          </button>
+
           <button
             onClick={onOpenStressTest}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-[#141B28] hover:bg-[#1A2334] text-slate-200 border border-slate-700/80 rounded-lg text-xs font-medium transition-colors cursor-pointer"
@@ -172,14 +197,16 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
 
         {/* Target Price & Return */}
         <div className="bg-[#10141E] border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-          <div className="text-xs font-mono text-slate-400 mb-1">PRICE TARGET ({selectedHorizon})</div>
+          <div className="text-xs font-mono text-slate-400 mb-1">
+            PRICE TARGET ({selectedHorizon}) • {selectedCurrency}
+          </div>
           
           <div>
             <div className="text-2xl font-bold font-mono text-white tracking-tight">
-              ${prediction.predictedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {formatCurrencyAmount(convertedTarget, selectedCurrency)}
             </div>
             <div className="text-xs text-slate-400 font-mono mt-0.5">
-              Spot: ${commodity.currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {commodity.unit}
+              Spot: {formatCurrencyAmount(convertedSpot, selectedCurrency)} ({convertUnitLabel(commodity.unit, selectedCurrency)})
             </div>
           </div>
 
@@ -200,26 +227,26 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
         <div className="bg-[#10141E] border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
           <div className="text-xs font-mono text-slate-400 flex items-center justify-between mb-2">
             <span>PROBABILISTIC RANGE</span>
-            <span className="text-[10px] text-slate-500 font-mono">90% C.I.</span>
+            <span className="text-[10px] text-slate-500 font-mono">90% C.I. ({selectedCurrency})</span>
           </div>
 
           <div className="space-y-1.5 font-mono text-xs">
             <div className="flex items-center justify-between text-slate-400">
               <span className="text-rose-400/90">P10 (Bearish):</span>
-              <span className="font-semibold text-slate-200">${prediction.confidenceInterval.lowerP10.toFixed(2)}</span>
+              <span className="font-semibold text-slate-200">{formatCurrencyAmount(convertedP10, selectedCurrency)}</span>
             </div>
             <div className="flex items-center justify-between text-slate-300 bg-slate-900/60 px-2 py-1 rounded">
               <span className="text-cyan-400 font-medium">P50 (Median):</span>
-              <span className="font-bold text-white">${prediction.confidenceInterval.medianP50.toFixed(2)}</span>
+              <span className="font-bold text-white">{formatCurrencyAmount(convertedP50, selectedCurrency)}</span>
             </div>
             <div className="flex items-center justify-between text-slate-400">
               <span className="text-emerald-400/90">P90 (Bullish):</span>
-              <span className="font-semibold text-slate-200">${prediction.confidenceInterval.upperP90.toFixed(2)}</span>
+              <span className="font-semibold text-slate-200">{formatCurrencyAmount(convertedP90, selectedCurrency)}</span>
             </div>
           </div>
 
           <div className="mt-2 pt-2 border-t border-slate-800/70 text-[11px] text-slate-400 font-mono text-right">
-            Spread: ${(prediction.confidenceInterval.upperP90 - prediction.confidenceInterval.lowerP10).toFixed(2)}
+            Spread: {formatCurrencyAmount(convertedP90 - convertedP10, selectedCurrency)}
           </div>
         </div>
 
@@ -227,17 +254,17 @@ export const PredictionDashboard: React.FC<PredictionDashboardProps> = ({
         <div className="bg-[#10141E] border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
           <div className="text-xs font-mono text-slate-400 flex items-center gap-1 mb-2">
             <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-            <span>RISK PARAMETERS</span>
+            <span>RISK PARAMETERS ({selectedCurrency})</span>
           </div>
 
           <div className="space-y-2 font-mono text-xs">
             <div className="flex items-center justify-between p-1.5 bg-rose-950/20 border border-rose-900/40 rounded">
               <span className="text-rose-400 font-medium">Stop-Loss Target:</span>
-              <span className="font-bold text-white">${prediction.recommendedStopLoss.toFixed(2)}</span>
+              <span className="font-bold text-white">{formatCurrencyAmount(convertedStopLoss, selectedCurrency)}</span>
             </div>
             <div className="flex items-center justify-between p-1.5 bg-emerald-950/20 border border-emerald-900/40 rounded">
               <span className="text-emerald-400 font-medium">Take-Profit Target:</span>
-              <span className="font-bold text-white">${prediction.recommendedTakeProfit.toFixed(2)}</span>
+              <span className="font-bold text-white">{formatCurrencyAmount(convertedTakeProfit, selectedCurrency)}</span>
             </div>
           </div>
 

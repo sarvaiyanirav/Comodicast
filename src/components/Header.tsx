@@ -1,15 +1,18 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User } from 'firebase/auth';
 import { Commodity } from '../types/commodity';
+import { CurrencyCode, SUPPORTED_CURRENCIES, convertUSD, formatCurrencyAmount } from '../lib/currencies';
 import {
   TrendingUp,
   TrendingDown,
   HardDrive,
-  FolderOpen,
   LogOut,
   Sparkles,
   RefreshCw,
   Search,
+  ChevronDown,
+  ArrowRightLeft,
+  Github,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -27,6 +30,10 @@ interface HeaderProps {
   onSearchChange: (val: string) => void;
   isRefreshing: boolean;
   onRefreshData: () => void;
+  selectedCurrency: CurrencyCode;
+  onSelectCurrency: (code: CurrencyCode) => void;
+  onOpenCurrencyModal: () => void;
+  onOpenGitHubModal: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -44,7 +51,27 @@ export const Header: React.FC<HeaderProps> = ({
   onSearchChange,
   isRefreshing,
   onRefreshData,
+  selectedCurrency,
+  onSelectCurrency,
+  onOpenCurrencyModal,
+  onOpenGitHubModal,
 }) => {
+  const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const activeCurrencyInfo = SUPPORTED_CURRENCIES[selectedCurrency] || SUPPORTED_CURRENCIES.USD;
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsCurrencyDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   return (
     <header className="border-b border-slate-800 bg-[#0B0E14] sticky top-0 z-40 text-slate-100">
       {/* Top Real-Time Ticker Tape */}
@@ -54,13 +81,14 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
           </span>
-          MARKET FEED:
+          MARKET FEED ({selectedCurrency}):
         </div>
 
         <div className="flex items-center gap-6 shrink-0">
           {commodities.slice(0, 8).map((c) => {
             const isPos = c.change >= 0;
             const isSelected = c.id === selectedCommodityId;
+            const convertedPrice = convertUSD(c.currentPrice, selectedCurrency);
             return (
               <button
                 key={c.id}
@@ -70,7 +98,9 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <span className="font-semibold text-slate-200">{c.symbol}</span>
-                <span className="text-slate-100 font-mono">${c.currentPrice.toLocaleString()}</span>
+                <span className="text-slate-100 font-mono">
+                  {formatCurrencyAmount(convertedPrice, selectedCurrency)}
+                </span>
                 <span className={`flex items-center text-[11px] ${isPos ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {isPos ? <TrendingUp className="w-3 h-3 mr-0.5" /> : <TrendingDown className="w-3 h-3 mr-0.5" />}
                   {isPos ? '+' : ''}{c.changePercent.toFixed(2)}%
@@ -115,8 +145,85 @@ export const Header: React.FC<HeaderProps> = ({
           />
         </div>
 
-        {/* Actions & Google Drive Auth */}
-        <div className="flex items-center gap-3">
+        {/* Actions, Currency Selector, GitHub & Google Drive Auth */}
+        <div className="flex items-center gap-2">
+          {/* Currency Switcher Dropdown */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={() => setIsCurrencyDropdownOpen(!isCurrencyDropdownOpen)}
+              className="flex items-center gap-1.5 bg-[#111622] hover:bg-[#161D2B] text-slate-200 border border-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-mono transition-colors shadow-xs cursor-pointer"
+              title="Select Terminal Base Currency"
+            >
+              <span className="text-sm">{activeCurrencyInfo.flag}</span>
+              <span className="font-bold text-white">{activeCurrencyInfo.code}</span>
+              <span className="text-slate-400 font-semibold">{activeCurrencyInfo.symbol}</span>
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isCurrencyDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Quick Currency Dropdown Menu */}
+            {isCurrencyDropdownOpen && (
+              <div className="absolute right-0 mt-1.5 w-56 bg-[#111622] border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 text-xs font-mono animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-2.5 py-1.5 text-[10px] text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800 flex items-center justify-between">
+                  <span>Display Currency</span>
+                  <span>1 USD =</span>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto py-1 space-y-0.5">
+                  {(Object.keys(SUPPORTED_CURRENCIES) as CurrencyCode[]).map((code) => {
+                    const info = SUPPORTED_CURRENCIES[code];
+                    const isSelected = selectedCurrency === code;
+                    return (
+                      <button
+                        key={code}
+                        onClick={() => {
+                          onSelectCurrency(code);
+                          setIsCurrencyDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span>{info.flag}</span>
+                          <span>{info.code}</span>
+                          <span className="text-[10px] text-slate-500">({info.symbol})</span>
+                        </div>
+                        <span className="text-[11px] text-slate-400">
+                          {info.rateAgainstUSD}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-1.5 border-t border-slate-800">
+                  <button
+                    onClick={() => {
+                      setIsCurrencyDropdownOpen(false);
+                      onOpenCurrencyModal();
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-[11px] text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <ArrowRightLeft className="w-3 h-3" />
+                    <span>Open FX Valuation Matrix</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* GitHub Sync Button */}
+          <button
+            onClick={onOpenGitHubModal}
+            className="flex items-center gap-1.5 bg-[#121824] hover:bg-[#182030] text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors shadow-xs cursor-pointer"
+            title="Sync with GitHub Repository or Download ZIP"
+          >
+            <Github className="w-3.5 h-3.5 text-slate-300" />
+            <span className="hidden sm:inline">Sync GitHub</span>
+          </button>
+
           {/* Refresh Real-Time Data */}
           <button
             onClick={onRefreshData}
@@ -167,7 +274,7 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             </div>
           ) : (
-            /* Official Google Sign-In Button compliant with Google Workspace skill */
+            /* Official Google Sign-In Button */
             <button
               onClick={onLogin}
               disabled={isLoggingIn}

@@ -6,9 +6,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { User } from 'firebase/auth';
 import { Commodity, CommoditySector, ForecastHorizon, PredictionResult, ScenarioShock } from './types/commodity';
+import { CurrencyCode } from './lib/currencies';
 import { COMMODITIES_CATALOG } from './lib/commoditiesData';
 import { runQuantitativeForecast } from './lib/econometricModel';
-import { initAuth, googleSignIn, logout, getAccessToken } from './lib/firebase';
+import { initAuth, googleSignIn, logout } from './lib/firebase';
 import { listSavedForecastsFromDrive } from './lib/drive';
 
 import { Header } from './components/Header';
@@ -19,6 +20,8 @@ import { ScenarioSimulator } from './components/ScenarioSimulator';
 import { DriveExportModal } from './components/DriveExportModal';
 import { DriveDossierManager } from './components/DriveDossierManager';
 import { LiveMarketNews } from './components/LiveMarketNews';
+import { CurrencyConverterWidget } from './components/CurrencyConverterWidget';
+import { GitHubSyncModal } from './components/GitHubSyncModal';
 
 const DEFAULT_SHOCKS: ScenarioShock = {
   dxyDeltaPercent: 0,
@@ -34,6 +37,13 @@ export default function App() {
   const [selectedSector, setSelectedSector] = useState<'ALL' | CommoditySector>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedHorizon, setSelectedHorizon] = useState<ForecastHorizon>('30D');
+
+  // Currency selection & conversion state
+  const [selectedCurrency, setSelectedCurrency] = useState<CurrencyCode>('USD');
+  const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(false);
+
+  // GitHub Sync state
+  const [isGitHubModalOpen, setIsGitHubModalOpen] = useState(false);
 
   // Prediction state
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
@@ -134,7 +144,6 @@ export default function App() {
           const result: PredictionResult = await response.json();
           setPrediction(result);
         } else {
-          // Graceful fallback to client quantitative model
           const fallback = runQuantitativeForecast(commodity, horizon, shocks);
           setPrediction(fallback);
         }
@@ -156,12 +165,11 @@ export default function App() {
     }
   }, [currentCommodity.id, selectedHorizon, activeShocks, fetchPrediction]);
 
-  // Subtle real-time price tick simulation to provide live terminal feel
+  // Real-time price tick simulation
   useEffect(() => {
     const interval = setInterval(() => {
       setCommodities((prev) =>
         prev.map((c) => {
-          // 40% chance this commodity ticks
           if (Math.random() > 0.4) return c;
 
           const tickVol = (c.volatility30d / 100) * 0.0018;
@@ -170,7 +178,6 @@ export default function App() {
           const priceDiff = Number((newPrice - c.previousClose).toFixed(2));
           const pctDiff = Number(((priceDiff / c.previousClose) * 100).toFixed(2));
 
-          // Also update latest historical point
           const updatedHistory = [...c.history];
           if (updatedHistory.length > 0) {
             const last = { ...updatedHistory[updatedHistory.length - 1] };
@@ -209,7 +216,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#080A0F] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Header with ticker tape and Google Drive auth */}
+      {/* Header with ticker tape, currency switcher, GitHub sync, and Google Drive auth */}
       <Header
         user={user}
         accessToken={accessToken}
@@ -225,6 +232,10 @@ export default function App() {
         onSearchChange={setSearchTerm}
         isRefreshing={isRefreshing}
         onRefreshData={handleManualRefresh}
+        selectedCurrency={selectedCurrency}
+        onSelectCurrency={setSelectedCurrency}
+        onOpenCurrencyModal={() => setIsCurrencyModalOpen(true)}
+        onOpenGitHubModal={() => setIsGitHubModalOpen(true)}
       />
 
       {/* Main Terminal Body */}
@@ -237,6 +248,7 @@ export default function App() {
           selectedSector={selectedSector}
           onSelectSector={setSelectedSector}
           searchTerm={searchTerm}
+          selectedCurrency={selectedCurrency}
         />
 
         {/* Core Layout: Chart & Real-Time Price Cone */}
@@ -245,6 +257,7 @@ export default function App() {
             commodity={currentCommodity}
             trajectory={prediction?.trajectory}
             predictedPrice={prediction?.predictedPrice}
+            selectedCurrency={selectedCurrency}
           />
         </div>
 
@@ -258,11 +271,28 @@ export default function App() {
           onOpenStressTest={() => setIsStressTestOpen(true)}
           onExportToDrive={() => setIsExportModalOpen(true)}
           isDriveConnected={Boolean(accessToken)}
+          selectedCurrency={selectedCurrency}
+          onOpenCurrencyModal={() => setIsCurrencyModalOpen(true)}
         />
 
         {/* Live Market Catalysts & Intelligence */}
         <LiveMarketNews selectedSector={currentCommodity.sector} />
       </main>
+
+      {/* Currency Converter & FX Valuation Matrix Modal */}
+      <CurrencyConverterWidget
+        commodity={currentCommodity}
+        selectedCurrency={selectedCurrency}
+        onSelectCurrency={setSelectedCurrency}
+        isOpen={isCurrencyModalOpen}
+        onClose={() => setIsCurrencyModalOpen(false)}
+      />
+
+      {/* GitHub Sync & Export Modal */}
+      <GitHubSyncModal
+        isOpen={isGitHubModalOpen}
+        onClose={() => setIsGitHubModalOpen(false)}
+      />
 
       {/* Macroeconomic "What-If" Scenario Stress Tester Modal */}
       <ScenarioSimulator
@@ -285,6 +315,7 @@ export default function App() {
           onExportSuccess={() => {
             if (accessToken) refreshDriveCount(accessToken);
           }}
+          selectedCurrency={selectedCurrency}
         />
       )}
 
@@ -300,7 +331,7 @@ export default function App() {
       <footer className="border-t border-slate-900 bg-[#080A0F] py-4 text-center text-xs text-slate-500 font-mono">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>COMMODICAST TERMINAL • Real-Time Predictive Econometric Models</span>
-          <span>Google Drive Cloud Sync Enabled • Historical Data: NYMEX, ICE, COMEX, CBOT, LME</span>
+          <span>Google Drive Cloud Sync Enabled • Active Currency: {selectedCurrency} • Historical Data: NYMEX, ICE, COMEX, CBOT, LME</span>
         </div>
       </footer>
     </div>

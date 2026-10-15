@@ -1,11 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { Commodity, PricePoint, TrajectoryPoint } from '../types/commodity';
-import { BarChart3, LineChart, Eye, Activity, Calendar } from 'lucide-react';
+import { CurrencyCode, convertUSD, formatCurrencyAmount, convertUnitLabel, SUPPORTED_CURRENCIES } from '../lib/currencies';
+import { BarChart3, LineChart, Eye, Activity } from 'lucide-react';
 
 interface InteractiveChartProps {
   commodity: Commodity;
   trajectory?: TrajectoryPoint[];
   predictedPrice?: number;
+  selectedCurrency: CurrencyCode;
 }
 
 type ChartMode = 'candlestick' | 'line';
@@ -15,6 +17,7 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
   commodity,
   trajectory = [],
   predictedPrice,
+  selectedCurrency,
 }) => {
   const [chartMode, setChartMode] = useState<ChartMode>('candlestick');
   const [timeframe, setTimeframe] = useState<Timeframe>('3M');
@@ -22,7 +25,10 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
   const [showForecastCone, setShowForecastCone] = useState(true);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  // Filter historical points by timeframe
+  const currencyInfo = SUPPORTED_CURRENCIES[selectedCurrency] || SUPPORTED_CURRENCIES.USD;
+  const rate = currencyInfo.rateAgainstUSD;
+
+  // Filter historical points by timeframe and convert currency
   const historyData = useMemo(() => {
     const all = commodity.history;
     const count =
@@ -30,8 +36,32 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
       timeframe === '1W' ? 24 :
       timeframe === '1M' ? 30 :
       timeframe === '3M' ? 60 : all.length;
-    return all.slice(-count);
-  }, [commodity.history, timeframe]);
+    
+    return all.slice(-count).map((d) => ({
+      ...d,
+      open: Number((d.open * rate).toFixed(currencyInfo.decimalPlaces)),
+      high: Number((d.high * rate).toFixed(currencyInfo.decimalPlaces)),
+      low: Number((d.low * rate).toFixed(currencyInfo.decimalPlaces)),
+      close: Number((d.close * rate).toFixed(currencyInfo.decimalPlaces)),
+    }));
+  }, [commodity.history, timeframe, rate, currencyInfo.decimalPlaces]);
+
+  // Converted trajectory
+  const convertedTrajectory = useMemo(() => {
+    return trajectory.map((t) => ({
+      ...t,
+      p10: Number((t.p10 * rate).toFixed(currencyInfo.decimalPlaces)),
+      p50: Number((t.p50 * rate).toFixed(currencyInfo.decimalPlaces)),
+      p90: Number((t.p90 * rate).toFixed(currencyInfo.decimalPlaces)),
+    }));
+  }, [trajectory, rate, currencyInfo.decimalPlaces]);
+
+  const convertedCurrentPrice = commodity.currentPrice * rate;
+  const convertedPredictedPrice = predictedPrice ? predictedPrice * rate : undefined;
+  const convertedDayLow = commodity.dayLow * rate;
+  const convertedDayHigh = commodity.dayHigh * rate;
+  const convertedYearLow = commodity.yearLow * rate;
+  const convertedYearHigh = commodity.yearHigh * rate;
 
   // Compute 20-period EMA and 50-period SMA for history
   const { ema20, sma50 } = useMemo(() => {
@@ -73,16 +103,16 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
     let max = Math.max(...historyData.map((d) => d.high));
     let maxVol = Math.max(...historyData.map((d) => d.volume), 1);
 
-    if (showForecastCone && trajectory.length > 0) {
-      const trajMin = Math.min(...trajectory.map((t) => t.p10));
-      const trajMax = Math.max(...trajectory.map((t) => t.p90));
+    if (showForecastCone && convertedTrajectory.length > 0) {
+      const trajMin = Math.min(...convertedTrajectory.map((t) => t.p10));
+      const trajMax = Math.max(...convertedTrajectory.map((t) => t.p90));
       min = Math.min(min, trajMin);
       max = Math.max(max, trajMax);
     }
 
-    if (predictedPrice) {
-      min = Math.min(min, predictedPrice);
-      max = Math.max(max, predictedPrice);
+    if (convertedPredictedPrice) {
+      min = Math.min(min, convertedPredictedPrice);
+      max = Math.max(max, convertedPredictedPrice);
     }
 
     const padding = (max - min) * 0.08;
@@ -91,12 +121,12 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
       maxPrice: max + padding,
       maxVolume: maxVol,
     };
-  }, [historyData, trajectory, showForecastCone, predictedPrice]);
+  }, [historyData, convertedTrajectory, showForecastCone, convertedPredictedPrice]);
 
   // Chart dimensions
   const svgWidth = 840;
   const svgHeight = 360;
-  const paddingRight = 65;
+  const paddingRight = 75;
   const paddingBottom = 40;
   const paddingTop = 20;
   const paddingLeft = 10;
@@ -106,7 +136,7 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
   const volumeHeight = 60;
   const priceChartHeight = chartHeight - volumeHeight - 15;
 
-  const totalPoints = historyData.length + (showForecastCone ? trajectory.length : 0);
+  const totalPoints = historyData.length + (showForecastCone ? convertedTrajectory.length : 0);
   const stepX = chartWidth / Math.max(totalPoints - 1, 1);
 
   const priceToY = (price: number) => {
@@ -133,11 +163,15 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
               <span className="text-xs font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/50 px-2 py-0.5 rounded">
                 {commodity.exchange}:{commodity.symbol}
               </span>
+              <span className="text-xs font-mono text-amber-300 bg-amber-950/60 border border-amber-800/40 px-2 py-0.5 rounded flex items-center gap-1">
+                <span>{currencyInfo.flag}</span>
+                <span>{selectedCurrency}</span>
+              </span>
             </div>
             <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5 font-mono">
-              <span>Unit: {commodity.unit}</span>
-              <span>24h Range: ${commodity.dayLow} - ${commodity.dayHigh}</span>
-              <span>52W: ${commodity.yearLow} - ${commodity.yearHigh}</span>
+              <span>Unit: {convertUnitLabel(commodity.unit, selectedCurrency)}</span>
+              <span>24h: {formatCurrencyAmount(convertedDayLow, selectedCurrency)} - {formatCurrencyAmount(convertedDayHigh, selectedCurrency)}</span>
+              <span>52W: {formatCurrencyAmount(convertedYearLow, selectedCurrency)} - {formatCurrencyAmount(convertedYearHigh, selectedCurrency)}</span>
             </div>
           </div>
         </div>
@@ -213,18 +247,18 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
         {hoveredPoint ? (
           <div className="flex items-center gap-4 flex-wrap">
             <span className="text-cyan-400 font-bold">{hoveredPoint.date}</span>
-            <span>O: <strong className="text-white">${hoveredPoint.open}</strong></span>
-            <span>H: <strong className="text-emerald-400">${hoveredPoint.high}</strong></span>
-            <span>L: <strong className="text-rose-400">${hoveredPoint.low}</strong></span>
-            <span>C: <strong className="text-white">${hoveredPoint.close}</strong></span>
+            <span>O: <strong className="text-white">{formatCurrencyAmount(hoveredPoint.open, selectedCurrency)}</strong></span>
+            <span>H: <strong className="text-emerald-400">{formatCurrencyAmount(hoveredPoint.high, selectedCurrency)}</strong></span>
+            <span>L: <strong className="text-rose-400">{formatCurrencyAmount(hoveredPoint.low, selectedCurrency)}</strong></span>
+            <span>C: <strong className="text-white">{formatCurrencyAmount(hoveredPoint.close, selectedCurrency)}</strong></span>
             <span className="text-slate-400">Vol: {hoveredPoint.volume.toLocaleString()}</span>
           </div>
         ) : (
           <div className="flex items-center gap-4 text-slate-400">
-            <span>Hover chart to inspect historical price bars & forecast projections</span>
-            {predictedPrice && (
+            <span>Hover chart to inspect converted historical price bars & forecast projections</span>
+            {convertedPredictedPrice && (
               <span className="text-cyan-300 font-semibold">
-                AI Target: ${predictedPrice.toFixed(2)}
+                AI Target: {formatCurrencyAmount(convertedPredictedPrice, selectedCurrency)}
               </span>
             )}
           </div>
@@ -270,13 +304,13 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
                   strokeDasharray="3 3"
                 />
                 <text
-                  x={svgWidth - paddingRight + 8}
+                  x={svgWidth - paddingRight + 6}
                   y={y + 4}
                   fill="#64748b"
                   fontSize="10"
                   fontFamily="monospace"
                 >
-                  ${price.toFixed(2)}
+                  {formatCurrencyAmount(price, selectedCurrency)}
                 </text>
               </g>
             );
@@ -285,9 +319,9 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
           {/* Current Spot Price Reference Line */}
           <line
             x1={paddingLeft}
-            y1={priceToY(commodity.currentPrice)}
+            y1={priceToY(convertedCurrentPrice)}
             x2={svgWidth - paddingRight}
-            y2={priceToY(commodity.currentPrice)}
+            y2={priceToY(convertedCurrentPrice)}
             stroke="#0ea5e9"
             strokeWidth="1.2"
             strokeDasharray="4 4"
@@ -399,25 +433,23 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
             />
           )}
 
-          {/* Forecast Cone Projection (extends into the right side of the canvas) */}
-          {showForecastCone && trajectory.length > 0 && (() => {
+          {/* Forecast Cone Projection */}
+          {showForecastCone && convertedTrajectory.length > 0 && (() => {
             const startX = paddingLeft + (historyData.length - 1) * stepX;
             const startPrice = historyData[historyData.length - 1].close;
             const startY = priceToY(startPrice);
 
-            // Upper band points
-            const upperPoints = trajectory.map((pt, idx) => {
+            const upperPoints = convertedTrajectory.map((pt, idx) => {
               const x = startX + (idx + 1) * stepX;
               const y = priceToY(pt.p90);
               return `${x},${y}`;
             });
 
-            // Lower band points in reverse
-            const lowerPointsRev = trajectory
+            const lowerPointsRev = convertedTrajectory
               .slice()
               .reverse()
               .map((pt, idx) => {
-                const trajIdx = trajectory.length - 1 - idx;
+                const trajIdx = convertedTrajectory.length - 1 - idx;
                 const x = startX + (trajIdx + 1) * stepX;
                 const y = priceToY(pt.p10);
                 return `${x},${y}`;
@@ -425,22 +457,18 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
 
             const bandPathD = `M ${startX},${startY} L ${upperPoints.join(' L ')} L ${lowerPointsRev.join(' L ')} Z`;
 
-            // Median P50 line
-            const p50PathD = `M ${startX},${startY} ${trajectory
+            const p50PathD = `M ${startX},${startY} ${convertedTrajectory
               .map((pt, idx) => `L ${startX + (idx + 1) * stepX} ${priceToY(pt.p50)}`)
               .join(' ')}`;
 
             return (
               <g className="forecast-cone">
-                {/* Shaded confidence interval band */}
                 <path d={bandPathD} fill="url(#forecastBandGrad)" stroke="#06b6d4" strokeWidth="0.8" strokeDasharray="3 3" />
-                {/* Median P50 projected trajectory line */}
                 <path d={p50PathD} fill="none" stroke="#38bdf8" strokeWidth="2.2" strokeDasharray="5 3" />
                 
-                {/* Terminal predicted target pin */}
-                {trajectory.length > 0 && (() => {
-                  const lastPt = trajectory[trajectory.length - 1];
-                  const endX = startX + trajectory.length * stepX;
+                {convertedTrajectory.length > 0 && (() => {
+                  const lastPt = convertedTrajectory[convertedTrajectory.length - 1];
+                  const endX = startX + convertedTrajectory.length * stepX;
                   const endY = priceToY(lastPt.p50);
                   return (
                     <g>
@@ -453,7 +481,7 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
                         fontWeight="bold"
                         fontFamily="monospace"
                       >
-                        Target: ${lastPt.p50}
+                        Target: {formatCurrencyAmount(lastPt.p50, selectedCurrency)}
                       </text>
                     </g>
                   );
@@ -494,7 +522,6 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
 
           {/* Time axis labels */}
           {historyData.map((d, i) => {
-            // Display label every 7-10 points
             const interval = Math.max(Math.floor(historyData.length / 5), 1);
             if (i % interval !== 0 && i !== historyData.length - 1) return null;
             const x = paddingLeft + i * stepX;
